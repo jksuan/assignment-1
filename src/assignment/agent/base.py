@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import yaml
 import logging
 import math
 import os
@@ -152,6 +153,7 @@ class Agent:
 
         # TODO(1.1.a): Add machinery to maintain agent state as it takes actions
         # and observes the results.
+        self.messages: list[dict[str, Any]] = []
 
     def load_skills(self, skills_path: Path) -> dict[str, dict[str, str]]:
         """Load the skill folders exposed to this agent."""
@@ -164,7 +166,34 @@ class Agent:
         # ``content`` of the skill file for ``invoke_skill``. Reject duplicate
         # names and malformed or missing frontmatter with a clear
         # ``ValueError``.
-        raise NotImplementedError
+        if not skills_path.exists():
+            raise ValueError(f"Skills path {skills_path} does not exist")
+        if not skills_path.is_dir():
+            raise ValueError(f"Skills path {skills_path} is not a directory")
+        
+        skills = {}
+        for skill_path in skills_path.glob("*/SKILL.md"):
+            content = skill_path.read_text(encoding="utf-8")
+            parts = content.split("---", 2)
+            if len(parts) < 3:
+                raise ValueError(f"Malformed or missing frontmatter in {skill_path}")
+
+            frontmatter = yaml.safe_load(parts[1])
+            if not isinstance(frontmatter, dict):
+                raise ValueError(f"Malformed frontmatter in {skill_path}")
+            if "name" not in frontmatter or "description" not in frontmatter:
+                raise ValueError(f"Frontmatter missing name or description in {skill_path}")
+
+            name = frontmatter["name"]
+            if name in skills:
+                raise ValueError(f"Duplicate skill name: {name}")
+
+            skills[name] = {
+                "metadata": f"name: {name}\ndescription: {frontmatter['description']}",
+                "content": content,
+            }
+            
+        return skills
 
     def query_language_model(self) -> dict[str, Any]:
         """Send one tool-enabled Chat Completions request and normalize it."""
@@ -227,7 +256,11 @@ class Agent:
 
         # You want to be careful about which attributes of the class you modify
         # here as they may also be handled by the subclasses.
-        raise NotImplementedError
+        return [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": self.task_prompt},
+            *self.messages,
+        ]
 
     def estimate_active_prompt_tokens(self) -> int:
         """Estimate the next prompt, calibrated by the provider's latest usage."""
@@ -330,13 +363,20 @@ class Agent:
             # step. Ensure you identify when the agent has completed the task
             # by setting `Agent.finished`. If the agent exceeds the
             # `step_limit`, raise `StepLimitError`.
+            while not self.finished:
+                if self.steps_taken >= self.step_limit:
+                    raise StepLimitError
+                
+                # TODO(2.2) Call `maybe_compact_context()` before each new action
+                # request in your shared loop. It already estimates active tokens
+                # and handles the threshold, and tracks compaction events for
+                # logging.
 
-            # TODO(2.2) Call `maybe_compact_context()` before each new action
-            # request in your shared loop. It already estimates active tokens
-            # and handles the threshold, and tracks compaction events for
-            # logging.
-
-            raise NotImplementedError
+                message = self.query_language_model()
+                self.messages.append(message)
+                tool_calls = message.get("tool_calls") or []
+                if tool_calls:                    
+                    self.messages.extend(self.execute_tool_calls(tool_calls))         
         finally:
             # This block is provided infrastructure. Do not modify it: a
             # trajectory is required even when a run fails.
