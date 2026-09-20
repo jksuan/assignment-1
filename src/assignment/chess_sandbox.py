@@ -113,9 +113,9 @@ class ChessSandbox(Environment):
         # Accept either a path to a diff or the diff itself; a diff always has
         # newlines, a path never usefully does.
         if isinstance(patch, Path):
-            text = patch.read_text()
+            text = patch.read_bytes().decode("utf-8")
         else:
-            text = patch if "\n" in patch else Path(patch).read_text()
+            text = patch if "\n" in patch else Path(patch).read_bytes().decode("utf-8")
         encoded = base64.b64encode(text.encode()).decode()
 
         written = self.execute(f"echo {encoded} | base64 -d > /tmp/fix.diff")

@@ -43,7 +43,7 @@ def main() -> int:
 
     task = Task.load(args.task)
     evaluation = EvaluationSpec.load(args.evaluation)
-    patch = args.patch.read_text() if args.patch else None
+    patch = args.patch.read_bytes().decode("utf-8") if args.patch else None
 
     report = evaluate(
         evaluation,

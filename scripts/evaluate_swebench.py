@@ -37,7 +37,7 @@ def main() -> int:
     )
 
     instance = load_instance(args.instance_id)
-    patch = args.patch.read_text() if args.patch else None
+    patch = args.patch.read_bytes().decode("utf-8") if args.patch else None
 
     print(patch)
 

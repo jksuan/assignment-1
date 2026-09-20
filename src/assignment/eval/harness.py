@@ -207,6 +207,9 @@ def _apply_patch(env: Environment, patch: str, remote_path: str) -> tuple[bool, 
         Whether it applied, and the error output when it did not.
     """
     _write_remote_file(env, patch, remote_path)
+    # Windows checkouts copy CRLF into the image. The slim image's git has no
+    # --ignore-cr-at-eol, so strip CRs before matching a normal unified diff.
+    env.execute("git ls-files -z | xargs -0 sed -i 's/\\r$//'", cwd=TESTBED)
     # -p1 matches `git diff` output; fall back to `patch` for diffs git rejects
     # (fuzzy context, missing index lines) since agents produce those routinely.
     result = env.execute(f"git apply -v {remote_path}", cwd=TESTBED)
