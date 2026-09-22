@@ -31,7 +31,22 @@ MAX_OBSERVATION_CHARS = 10_000
 # TODO(Part 2): Write instructions that make the model produce concise working
 # memory for a software agent. The prompt should preserve concrete progress,
 # failures, test results, constraints, and next steps without copying raw output.
-COMPACTION_SYSTEM_PROMPT = ""
+COMPACTION_SYSTEM_PROMPT = """You compact a software agent's earlier transcript into concise factual working memory.
+
+The original system and task instructions will be kept verbatim outside this summary. Do not rewrite them. Summarize only the provided conversation prefix.
+
+Preserve, when present:
+- the objective and any constraints
+- files inspected or created
+- commands that were run and their concrete results
+- edits made
+- failed approaches, so they are not repeated
+- tests run and their outcomes
+- blockers
+- the next action to take
+
+Write short factual notes. Do not copy raw terminal output, diffs, stack traces, or file contents. Omit speculation and conversational filler. If something is unknown, say so briefly rather than inventing it.
+"""
 
 
 class StepLimitError(Exception):
@@ -63,6 +78,33 @@ def rough_message_tokens(messages: list[dict[str, Any]]) -> int:
 
     serialized = json.dumps(messages, ensure_ascii=False, separators=(",", ":"))
     return max(1, math.ceil(len(serialized) / 4))
+
+
+def _assistant_text(response: Any) -> str:
+    """Extract plain text from a chat-completion assistant message."""
+
+    try:
+        content = response.choices[0].message.content
+    except (AttributeError, IndexError):
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                chunks.append(part)
+                continue
+            if isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str):
+                    chunks.append(text)
+                continue
+            text = getattr(part, "text", None)
+            if isinstance(text, str):
+                chunks.append(text)
+        return "\n".join(chunks).strip()
+    return ""
 
 
 class Agent:
@@ -297,10 +339,30 @@ class Agent:
         # messages verbatim and at least the latest complete assistant action
         # with all linked tool observations. The resulting summary should change
         # what `build_prompt` emits, and reduce the length of the prompt.
+        keep = self.compaction_keep_recent_steps
+        assistant_indices = [
+            index
+            for index, message in enumerate(self.messages)
+            if message.get("role") == "assistant"
+        ]
+        split_at = assistant_indices[-keep]
+        old_prefix = self.messages[:split_at]
+        recent_messages = self.messages[split_at:]
 
-        raise NotImplementedError
-
-        compaction_prompt = []
+        compaction_prompt = [
+            {"role": "system", "content": COMPACTION_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "Standing system instructions are retained separately and "
+                    "must not be rewritten. Summarize only this old prefix.\n\n"
+                    f"<task>\n{self.task_prompt}\n</task>\n\n"
+                    "<conversation_prefix>\n"
+                    f"{json.dumps(old_prefix, ensure_ascii=False)}\n"
+                    "</conversation_prefix>"
+                ),
+            },
+        ]
 
         ### Do not modify this section ###
         compaction_response = self.client.chat.completions.create(
@@ -313,6 +375,16 @@ class Agent:
 
         # Use `compaction_response` to update what `build_prompt` emits, but
         # DO NOT modify the object itself. Let the method return it unchanged.
+        summary = _assistant_text(compaction_response)
+        if not summary:
+            summary = "No additional working memory was produced."
+        self.messages = [
+            {
+                "role": "user",
+                "content": f"<working_memory>\n{summary}\n</working_memory>",
+            },
+            *recent_messages,
+        ]
 
         ### Do not modify this section ###
         return compaction_prompt, compaction_response.model_dump(mode="json")
@@ -371,6 +443,7 @@ class Agent:
                 # request in your shared loop. It already estimates active tokens
                 # and handles the threshold, and tracks compaction events for
                 # logging.
+                self.maybe_compact_context()
 
                 message = self.query_language_model()
                 self.messages.append(message)
