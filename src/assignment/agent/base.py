@@ -252,7 +252,7 @@ class Agent:
                 model=self.model,
                 messages=messages,
                 tools=self.tools,
-                reasoning_effort="medium",
+                reasoning_effort="low",
                 max_completion_tokens=4096,
             )
         except Exception as exc:

@@ -107,8 +107,10 @@ class ChessAgent(Agent):
         )
 
         # TODO(Part 3): Register the play_move tool schema from tools.py.
-
+        self.tools.append(PLAY_MOVE_TOOL)
+        
         if programmatic_tools:
+            self.tools.append(SIMULATE_MOVE_TOOL)
             self.tools.append(RUN_PYTHON_TOOL)
 
         # run_python always executes in the sandbox, on the port the chess
@@ -174,7 +176,49 @@ class ChessAgent(Agent):
         # 4. Link every observation to its call with tool_call_id.
         # 5. Turn malformed, unknown, rejected, or extra parallel calls into
         #    recoverable <chess_error> observations instead of crashing.
-
-        # TODO(Part 3.3-4): add cases for simulate_move and run_python, with
-        # linked observations and recoverable errors, just like the old tool.
-        raise NotImplementedError
+        observations = []
+        content = ""
+        played = False
+        registered = {tool["function"]["name"] for tool in self.tools}
+        for tool_call in tool_calls:
+            name = tool_call["function"]["name"]
+            call_id = tool_call["id"]
+            if name not in registered:
+                content = f"<chess_error>Unknown tool: {name}</chess_error>"
+            elif name == "play_move":
+                if played:
+                    content = "<chess_error>Only one move can be played per turn.</chess_error>"
+                else:
+                    played = True
+                    result = _play_move(self.chess_client, tool_call["function"]["arguments"])
+                    if result.startswith("<chess_error>"):
+                        content = result
+                    else:
+                        state = json.loads(result)
+                        self.last_state = state
+                        self.finished = bool(state.get("game_over"))
+                        content = self.format_state(state)                        
+            
+            # TODO(Part 3.3-4): add cases for simulate_move and run_python, with
+            # linked observations and recoverable errors, just like the old tool.
+            elif name == "simulate_move":
+                content = _simulate_move(
+                    self.chess_client, tool_call["function"]["arguments"]
+                )
+            elif name == "run_python":
+                content = _run_python(
+                    self.env, 
+                    self.python_sandbox_port, 
+                    tool_call["function"]["arguments"]
+                )
+                if not content.startswith("<chess_error>"):
+                    state = _game_state(self.chess_client)
+                    self.last_state = state
+                    self.finished = bool(state.get("game_over"))
+                    content = f"{content}\n{self.format_state(state)}"
+            elif name == "invoke_skill":
+                content = _invoke_skill(self.skills, tool_call["function"]["arguments"])
+            else:
+                content = f"<chess_error>Unknown tool: {name}</chess_error>"
+            observations.append({"role": "tool", "tool_call_id": call_id, "content": content})
+        return observations

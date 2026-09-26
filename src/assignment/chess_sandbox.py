@@ -122,6 +122,9 @@ class ChessSandbox(Environment):
         if written["returncode"] != 0:
             raise RuntimeError(f"Could not upload the patch: {written['stderr'].strip()}")
 
+        # Windows checkouts copy CRLF into the image. Strip CRs so git apply
+        # can match a normal LF unified diff.
+        self.execute("git ls-files -z | xargs -0 sed -i 's/\\r$//'", cwd=TESTBED)
         applied = self.execute("git apply -v /tmp/fix.diff", cwd=TESTBED)
         if applied["returncode"] != 0:
             raise RuntimeError(f"Patch did not apply:\n{applied['stderr'].strip()}")
